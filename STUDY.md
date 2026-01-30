@@ -127,8 +127,88 @@ class MultiheadAttention(nn.Module):
         key = self.W_key(x)
         value = self.W_value(x)
 
-        ## multihead
+        ## multihead (batch, num_tokens, num_heads, head_dim) --> (batch, num_heads, num_tokens, head_dim)
+        query = query.transpose(1,2)
+        key = key.transpose(1,2)
+        value = value.transpose(1,2)
+
+        # attention score 계산 matmul (QK_T)
+        attention_score = query @ key.transpose(2, 3)
+
+        # masking
+        mask_bool = self.mask.bool()[:num_tokens, :num_tokens]
+        attention_score.masked_fill_(maks_bool, -torch.inf)
+
+        # softmax
+        attention_weight = torch.softmax(attention_score / keys.shape[-1]**0.5, dim=-1)
+        attention_weight = self.dropout(attention_weight)
+
         
+        context_vec = (attention_weight * value).transpose(1,2) # 원래 모습으로
+
+        # 헤드 결합
+        contect_vec = contect_vec.contiguous().view(b, num_tokens, self.d_out)
+
+        # 최송 선형 투영
+        contect_vec = self.out_proj(context_vec)
+
+        return contect_vec
 ```
 
 
+## Chapter 4 Exercise GPT (코드 중심)
+
+```python
+# 전체 텍스트를 토근화 한다. 
+token_ids = tokenizer.encode(text, allowed_special={"<|endoftext|>"})
+
+# 슬라이딩 윈도우 방식으로 데이터 조각
+# Stride 이동하면서 max_length 길이의 chunk를 만든다. (chunk 크기는 context_size)
+
+for i in range(0, len(token_ids)-max_length, stride):
+    input_chunk  = token_ids[i: i+max_length]
+
+    target_chunk = token_ids[i+1: i+max_length +1]
+
+    # 텐서로 변환해서 저장
+    self.input_ids.append(torch.tensor(input_chunk))
+    self.target_ids.append(torch.tenro(target_chunk))
+
+# DataLoader를 생성
+
+def create_dataloader_v1(txt, batch_size=4, max_length=256, stride=128, shuffle=True, drop_las=True, num_workers =0):
+    tokenizer = tiktoken.get_encoding("gpt2")
+
+    # 데이터셋 생성
+    dataset = GPTDatasetV1(txt, tokenizer, max_lenth, stride)
+
+    # 데이서로더 생성
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle = shuffle, drop_last = drop_last, num_workers = num_workers)
+
+    return dataloader
+```
+
+* 언어에서는 주로 LayerNorm을 주로 쓴다. 
+
+* 표준 TransformerBlock
+```python
+    # "vocab_size" 같은 것들은 key 값이라고 할 수 있다. 
+    # 50257은 dictionary의 value들이다. 
+    GPT_CONFIG_124M = {
+        "vocab_size": 50257,     # 단어 집합 크기
+        "context_length": 1024,  # 최대 문맥 길이
+        "emb_dim": 768,          # 임베딩 차원
+        "n_heads": 12,           # 어텐션 헤드 수
+        "n_layers": 12,          # 레이어 수
+        "drop_rate": 0.1,        # 드롭아웃 비율
+        "qkv_bias": False        # Q,K,V 편향 사용 여부
+    }
+    torch.tensor(encoded).unsqueeze(0) 을 주로 하는 이유는 배치로 만들기 위함이 크다. 
+```
+
+* PyTorch로 손실 계산하기
+```python
+logits_flat = logits.flatten(0, 1)
+
+target_flat = targets.flatten()
+```
